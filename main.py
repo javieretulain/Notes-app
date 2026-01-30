@@ -1,4 +1,6 @@
 #imports
+import json
+import os
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.textinput import TextInput
@@ -11,6 +13,23 @@ from kivy.uix.widget import Widget
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.modalview import ModalView
 from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.behaviors import ButtonBehavior
+
+def load_notes():
+    if not os.path.exists("notes.json"):
+        return []
+
+    with open("notes.json", "r") as f:
+        data = json.load(f)
+
+        if isinstance(data, dict):
+            return data.get("notes", [])
+
+        return data
+
+def save_notes(notes):
+    with open("notes.json", "w") as f:
+        json.dump(notes, f, indent=4)
 
 Window.size = (300, 500)
 
@@ -20,34 +39,6 @@ class MainScreen(Screen):
 class Notes(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', **kwargs)
-
-class NoteCard(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        self.size_hint_y = None
-        self.height = 120
-        self.padding = 10
-
-        with self.canvas.before:
-            Color(1, 1, 1, 1)  # blanco
-            self.rect = Rectangle(pos=self.pos, size=self.size)
-
-        self.bind(pos=self._update_rect, size=self._update_rect)
-
-        label = Label(
-            text="Note",
-            halign="center",
-            valign="middle",
-            color=(0, 0, 0, 1)
-        )
-        label.bind(size=label.setter("text_size"))
-
-        self.add_widget(label)
-
-    def _update_rect(self, *args):
-        self.rect.pos = self.pos
-        self.rect.size = self.size
 
 class EditPanel(ModalView):
     def __init__(self, **kwargs):
@@ -87,61 +78,44 @@ class EditPanel(ModalView):
 
     def go_to_add_note(self, instance):
                 self.dismiss()
-                App.get_running_app().root.current = "add_note"
-
-class AddNoteScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        layout = BoxLayout(
-            orientation="vertical",
-            padding=20,
-            spacing=10
-        )
-
-        title = Label(
-            text="Add Note",
-            font_size="22sp",
-            size_hint_y=None,
-            height=40
-        )
-
-        note_input = TextInput(
-            hint_text="Write your note here...",
-            multiline=True
-        )
-
-        back_button = Button(
-            text="Back",
-            size_hint_y=None,
-            height=40
-        )
-        back_button.bind(on_press=self.go_back)
-
-        layout.add_widget(title)
-        layout.add_widget(note_input)
-        layout.add_widget(back_button)
-
-        self.add_widget(layout)
-
-    def go_back(self, instance):
-        self.manager.current = "main"
+                App.get_running_app().open_new_note()
 
 class NotesApp(App):
+    def open_new_note(self):
+        self.current_note_index = None
+        self.screen_manager.current = "edit_note"
+
+    def open_note(self, index):
+        self.current_note_index = index
+        self.screen_manager.current = "edit_note"
+
     def on_edit_button_press(self, instance):
         edit_panel = EditPanel()
         edit_panel.open()
     
-    def on_add_note_button_press(self, instance):
-        pass
-        
+    def refresh_notes(self):
+        self.notes_grid.clear_widgets()
+
+        notes = load_notes()
+        for index, note in enumerate(notes):
+            self.notes_grid.add_widget(
+                NoteCard(note_index=index, title=note.get("title", "Sin título"))
+            )
+
+       
     def build(self):
         self.title = "Notes App"
         
-        sm = ScreenManager()
+        self.notes_grid = GridLayout(
+            cols=2,
+            spacing=10,
+            size_hint_y=None
+        )
+        self.notes_grid.bind(minimum_height=self.notes_grid.setter("height"))
+
+        self.screen_manager = ScreenManager()
 
         main_screen = MainScreen(name="main")
-        add_note_screen = AddNoteScreen(name="add_note")
         
         main_layout = Notes()
         
@@ -204,22 +178,12 @@ class NotesApp(App):
             valign="middle"
         )
         
-        notes_grid = GridLayout(
-            cols=2,
-            spacing=10,
-            size_hint_y=None
-        )
-        notes_grid.bind(minimum_height=notes_grid.setter("height"))
+        self.notes_grid.bind(minimum_height=self.notes_grid.setter("height"))
         
         spacer = Widget()
-        
-        with open ("notes.json", "r") as file:
-            notes = file.readlines()
-            for note in notes:
-                notes_grid.add_widget(NoteCard())
 
         scroll = ScrollView()
-        scroll.add_widget(notes_grid)
+        scroll.add_widget(self.notes_grid)
 
         body.add_widget(scroll)
         
@@ -234,11 +198,107 @@ class NotesApp(App):
         main_layout.add_widget(body)
         
         main_screen.add_widget(main_layout)
+        
+        self.screen_manager.add_widget(main_screen)
+        self.screen_manager.add_widget(EditNoteScreen(name="edit_note"))
 
-        sm.add_widget(main_screen)
-        sm.add_widget(add_note_screen)
+        self.refresh_notes()
+        
+        return self.screen_manager   
 
-        return sm   
-   
+class EditNoteScreen(Screen):
+    def on_enter(self):
+        app = App.get_running_app()
+        notes = load_notes()
+
+        self.note_index = app.current_note_index
+
+        if self.note_index is None:
+            self.title_input.text = ""
+            self.body_input.text = ""
+            return
+
+        note = notes[self.note_index]
+        self.title_input.text = note.get("title", "")
+        self.body_input.text = note.get("text", "")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        layout = BoxLayout(orientation="vertical", padding=20, spacing=10)
+
+        self.title_input = TextInput(
+            hint_text="Title",
+            multiline=False,
+            font_size="22sp",
+            size_hint_y=None,
+            height=40
+        )
+
+        self.body_input = TextInput(
+            multiline=True,
+            hint_text="Write your note here...",
+            font_size="16sp"
+        )
+
+        back_btn = Button(text="Back", size_hint_y=None, height=40)
+        back_btn.bind(on_press=self.save_and_back)
+
+        layout.add_widget(self.title_input)
+        layout.add_widget(self.body_input)
+        layout.add_widget(back_btn)
+
+        self.add_widget(layout)
+
+    def save_and_back(self, instance):
+        notes = load_notes()
+
+        if self.note_index is None:
+            notes.append({
+                "title": self.title_input.text,
+                "text": self.body_input.text
+            })
+        else:
+            notes[self.note_index]["title"] = self.title_input.text
+            notes[self.note_index]["text"] = self.body_input.text
+
+        save_notes(notes)
+
+        App.get_running_app().screen_manager.current = "main"
+        App.get_running_app().refresh_notes()
+
+class NoteCard(ButtonBehavior, BoxLayout):
+    def __init__(self, note_index, title, **kwargs):
+        super().__init__(**kwargs)
+
+        self.note_index = note_index
+        self.size_hint_y = None
+        self.height = 120
+        self.padding = 10
+
+        with self.canvas.before:
+            Color(1, 1, 1, 1)
+            self.rect = Rectangle(pos=self.pos, size=self.size)
+
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+        self.label = Label(
+            text=title,
+            bold=True,
+            halign="center",
+            valign="middle",
+            color=(0, 0, 0, 1)
+        )
+        self.label.bind(size=self.label.setter("text_size"))
+        self.add_widget(self.label)
+
+    def _update_rect(self, *args):
+        self.rect.pos = self.pos
+        self.rect.size = self.size
+
+    def on_press(self):
+        App.get_running_app().open_note(self.note_index)
+
 if __name__ == "__main__":
     NotesApp().run() 
+    
